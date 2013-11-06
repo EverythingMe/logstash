@@ -170,6 +170,17 @@ class LogStash::Filters::Mutate < LogStash::Filters::Base
   #     }
   config :merge, :validate => :hash
 
+  # Perform a tr operation on an existing field
+  #
+  # Example:
+  # 
+  #     filter {
+  #       mutate {
+  #         tr => [ "field", "abcd", "1234" ]
+  #       }
+  #     }
+  config :tr, :validate => :hash
+
   public
   def register
     valid_conversions = %w(string integer float)
@@ -196,6 +207,19 @@ class LogStash::Filters::Mutate < LogStash::Filters::Base
         :replacement  => replacement
       }
     end
+
+    @tr_parsed = []
+    @tr.nil? or @tr.each_slice(3) do |field, tr_from, tr_to|
+      if [field, tr_from, tr_to].any? {|n| n.nil?}
+        @logger.error("Invalid tr configuration. tr has to define 3 elements per config entry", :field => field, :tr_from => tr_from , :tr_to => tr_to)
+        raise "Bad configuration, aborting."
+      end
+      @tr_parsed << {
+        :field        => field,
+        :needle       => tr_from,
+        :replacement  => tr_to
+      }
+    end
   end # def register
 
   public
@@ -214,6 +238,7 @@ class LogStash::Filters::Mutate < LogStash::Filters::Base
     split(event) if @split
     join(event) if @join
     merge(event) if @merge
+    tr(event) if @tr
 
     filter_matched(event)
   end # def filter
@@ -371,6 +396,34 @@ class LogStash::Filters::Mutate < LogStash::Filters::Base
       end
     end
   end
+
+  private
+  def tr(event)
+    @tr_parsed.each do |config|
+      field = config[:field]
+      tr_from = config[:tr_from]
+      tr_to = config[:tr_to]
+
+      if event[field].is_a?(Array)
+        event[field] = event[field].map do |v|
+          if not v.is_a?(String)
+            @logger.warn("tr mutation is only applicable for Strings, " +
+                          "skipping", :field => field, :value => v)
+            v
+          else
+            v.tr(tr_from, tr_to)
+          end
+        end
+      else
+        if not event[field].is_a?(String)
+          @logger.debug("tr mutation is only applicable for Strings, " +
+                        "skipping", :field => field, :value => event[field])
+          next
+        end
+        event[field] = event[field].tr(tr_from, tr_to)
+      end
+    end # @tr_parsed.each
+  end # def tr
 
   private
   def merge(event)
